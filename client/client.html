@@ -1,0 +1,97 @@
+<!doctype html>
+<html>
+    <head>
+        <title>Teleparty Simple Client</title>
+    </head>
+    <body>
+        <h2>Teleparty Simple Client</h2>
+        <div>
+            <input id="name" placeholder="Your name" />
+            <button onclick="createRoom()">Create Room</button>
+            <input id="roomId" placeholder="Room ID to join" />
+            <button onclick="joinRoom()">Join Room</button>
+        </div>
+        <div>
+            <input id="chat" placeholder="Type a chat message" />
+            <button onclick="sendChat()">Send Chat</button>
+        </div>
+        <pre id="log"></pre>
+        <script>
+            let ws = null;
+            let userName = "";
+            let roomId = "";
+
+            function log(msg) {
+                document.getElementById("log").textContent += msg + "\n";
+                console.log(msg);
+            }
+
+            function createRoom() {
+                userName = document.getElementById("name").value;
+                // Step 1: Create the room and get the room ID
+                fetch(
+                    `http://127.0.0.1:8080/create?name=${encodeURIComponent(userName)}`,
+                )
+                    .then((response) => response.json())
+                    .then((data) => {
+                        // Expecting { room_id: "...", ... }
+                        if (!data.room_id) {
+                            log(
+                                "Failed to create room: " +
+                                    JSON.stringify(data),
+                            );
+                            return;
+                        }
+                        roomId = data.room_id;
+                        document.getElementById("roomId").value = roomId;
+                        log("Room created with ID: " + roomId);
+
+                        // Step 2: Connect to WebSocket as host
+                        // If your backend upgrades on /create, use that:
+                        // const wsUrl = `ws://127.0.0.1:8080/create?name=${encodeURIComponent(userName)}`;
+                        // If your backend expects /join/:room_id, use that:
+                        const wsUrl = `ws://127.0.0.1:8080/join/${encodeURIComponent(roomId)}?name=${encodeURIComponent(userName)}`;
+                        ws = new WebSocket(wsUrl);
+
+                        ws.onopen = () => log("WebSocket connected as host");
+                        ws.onmessage = (event) => {
+                            log("Received: " + event.data);
+                        };
+                        ws.onclose = () => log("WebSocket closed");
+                        ws.onerror = (e) => log("WebSocket error: " + e);
+                    })
+                    .catch((err) => {
+                        log("Error creating room: " + err);
+                    });
+            }
+
+            function joinRoom() {
+                userName = document.getElementById("name").value;
+                roomId = document.getElementById("roomId").value;
+                const wsUrl = `ws://127.0.0.1:8080/join/${encodeURIComponent(roomId)}?name=${encodeURIComponent(userName)}`;
+                ws = new WebSocket(wsUrl);
+
+                ws.onopen = () => log("WebSocket connected");
+                ws.onmessage = (event) => {
+                    log("Received: " + event.data);
+                };
+                ws.onclose = () => log("WebSocket closed");
+                ws.onerror = (e) => log("WebSocket error: " + e);
+            }
+
+            function sendChat() {
+                if (!ws || ws.readyState !== WebSocket.OPEN) {
+                    log("WebSocket not connected");
+                    return;
+                }
+                const chatMsg = document.getElementById("chat").value;
+                const msg = {
+                    Type: "chat",
+                    Data: { text: chatMsg },
+                };
+                ws.send(JSON.stringify(msg));
+                log("Sent: " + JSON.stringify(msg));
+            }
+        </script>
+    </body>
+</html>

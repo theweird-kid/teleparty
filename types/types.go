@@ -19,6 +19,7 @@ type MessageType string
 
 const (
 	MessageTypeChat        MessageType = "chat"
+	MessageTypeHostUpdate  MessageType = "host_update"
 	MessageTypeSyncRequest MessageType = "sync_req"
 	MessageTypeVideoPlay   MessageType = "video_play"
 	MessageTypeVideoPause  MessageType = "video_pause"
@@ -28,11 +29,11 @@ const (
 
 // Message represents a chat or control message sent via WebSocket.
 type Message struct {
-	FromUser  *User                  // Pointer for consistency and efficiency.
-	Type      MessageType            // Use enum for safety.
-	Data      map[string]interface{} // Flexible payload for different message types.
-	RoomID    string
-	Timestamp int64 // Unix timestamp for ordering/history.
+	FromUser  *User                  `json:"user"` // Pointer for consistency and efficiency.
+	Type      MessageType            `json:"type"` // Use enum for safety.
+	Data      map[string]interface{} `json:"data"` // Flexible payload for different message types.
+	RoomID    string                 `json:"room_id"`
+	Timestamp int64                  `json:"time_stamp"` // Unix timestamp for ordering/history.
 }
 
 // Room represents a watch party room.

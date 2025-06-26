@@ -3,6 +3,7 @@ package main
 import (
 	"fmt"
 
+	"github.com/gin-contrib/cors"
 	"github.com/gin-gonic/gin"
 	"github.com/theweird-kid/teleparty/handlers"
 	"github.com/theweird-kid/teleparty/services"
@@ -11,6 +12,7 @@ import (
 func main() {
 	fmt.Println("teleparty")
 	r := gin.New()
+	r.Use(cors.Default())
 
 	app := &handlers.Application{
 		RoomManager: services.NewRoomManager(),

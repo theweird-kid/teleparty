@@ -84,12 +84,18 @@ func (rm *RoomManager) BroadcastToRoom(msg *types.Message) {
 		return
 	}
 
-	// Broadcast Sync Request to Host
+	// Unicast Sync Request to Host
 	if msg.Type == types.MessageTypeSyncRequest {
 		// Get the Host of the room
 		room, exists := rm.Rooms[msg.RoomID]
-		if !exists || room == nil {
+		if !exists || room == nil || room.Host == nil {
 			return
+		}
+		select {
+		case room.Host.MessageChannel <- msg:
+			// Successfully sent to host
+		default:
+			// Host's channel is full; optionally handle this case (e.g., log, disconnect, etc.)
 		}
 		return
 	}
