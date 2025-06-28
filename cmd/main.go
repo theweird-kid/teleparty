@@ -3,6 +3,8 @@ package main
 import (
 	"fmt"
 	"net/http"
+	"os"
+	"strings"
 
 	"github.com/gin-contrib/cors"
 	"github.com/gin-gonic/gin"
@@ -12,9 +14,10 @@ import (
 
 func main() {
 	fmt.Println("teleparty")
-	r := gin.New()
+	allowedOrigins := strings.Split(os.Getenv("ALLOWED_ORIGINS"), ",")
+	r := gin.Default()
 	r.Use(cors.New(cors.Config{
-		AllowOrigins:     []string{"https://your-frontend.com", "http://localhost:3000"},
+		AllowOrigins:     allowedOrigins,
 		AllowMethods:     []string{"GET", "POST", "PUT", "DELETE"},
 		AllowHeaders:     []string{"Origin", "Content-Type", "Accept", "Authorization"},
 		AllowCredentials: true,
