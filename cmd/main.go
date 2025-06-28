@@ -13,7 +13,12 @@ import (
 func main() {
 	fmt.Println("teleparty")
 	r := gin.New()
-	r.Use(cors.Default())
+	r.Use(cors.New(cors.Config{
+		AllowOrigins:     []string{"https://your-frontend.com", "http://localhost:3000"},
+		AllowMethods:     []string{"GET", "POST", "PUT", "DELETE"},
+		AllowHeaders:     []string{"Origin", "Content-Type", "Accept", "Authorization"},
+		AllowCredentials: true,
+	}))
 
 	rm := services.NewRoomManager()
 	rm.StartCleanupListener()
