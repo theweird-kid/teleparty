@@ -1,9 +1,9 @@
 package handlers
 
 import (
-	"fmt"
 	"log"
 	"net/http"
+	"time"
 
 	"github.com/gin-gonic/gin"
 	"github.com/gorilla/websocket"
@@ -24,16 +24,10 @@ var upgrader = websocket.Upgrader{
 
 func (app *Application) JoinRoom(c *gin.Context) {
 	roomID := c.Param("room_id")
-	name := c.Query("name")
-	if name == "" {
+	userID := c.Query("user_id")
+	if userID == "" {
 		c.JSON(http.StatusBadRequest, gin.H{"error": "name required"})
 		return
-	}
-
-	user := &types.User{
-		ID:             utils.GenerateRandomID(),
-		Name:           name,
-		MessageChannel: make(chan *types.Message, BUFFER_SIZE),
 	}
 
 	room := app.RoomManager.Rooms[roomID]
@@ -41,8 +35,13 @@ func (app *Application) JoinRoom(c *gin.Context) {
 		c.JSON(http.StatusNotFound, gin.H{"error": "room not found"})
 		return
 	}
-	// Register the user in the room
-	app.RoomManager.JoinRoom(user, roomID)
+
+	// Get the registered user and write conn
+	user := room.Members[userID]
+	if user == nil {
+		c.JSON(http.StatusNotFound, gin.H{"error": "user not found in room"})
+		return
+	}
 
 	conn, err := upgrader.Upgrade(c.Writer, c.Request, nil)
 	if err != nil {
@@ -52,7 +51,33 @@ func (app *Application) JoinRoom(c *gin.Context) {
 	user.Conn = conn
 
 	// Start goroutine to handle incoming/outgoing messages for this user
-	go app.handleUserConnection(user, room)
+	go app.handleUserConnection(user, roomID)
+}
+
+func (app *Application) RequestJoin(c *gin.Context) {
+	name := c.Query("name")
+	roomID := c.Param("room_id")
+	if name == "" {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "name required"})
+		return
+	}
+	user := &types.User{
+		ID:             utils.GenerateRandomID(),
+		Name:           name,
+		MessageChannel: make(chan *types.Message, 16),
+	}
+	// Register the user in the room
+	cmdChan := app.RoomManager.CmdChans[roomID]
+	cmdChan <- types.RoomCommand{
+		Type: types.CmdJoin,
+		User: user,
+	}
+
+	c.JSON(http.StatusOK, gin.H{
+		"room_id":   roomID,
+		"user_id":   user.ID,
+		"user_name": user.Name,
+	})
 }
 
 func (app *Application) CreateRoom(c *gin.Context) {
@@ -61,38 +86,61 @@ func (app *Application) CreateRoom(c *gin.Context) {
 		c.JSON(http.StatusBadRequest, gin.H{"error": "name required"})
 		return
 	}
+	// Create User (host)
 	host := &types.User{
 		ID:             utils.GenerateRandomID(),
 		Name:           name,
 		MessageChannel: make(chan *types.Message, 16),
 	}
-	room := app.RoomManager.CreateNewRoom(host)
+	// Create Room
+	roomID := utils.GenerateRandomID()
+	room := &types.Room{
+		RoomID:       roomID,
+		Host:         host,
+		Members:      map[string]*types.User{host.ID: host},
+		VideoURL:     "",
+		VideoRuntime: 0,
+		IsPlaying:    false,
+	}
+	cmdChan := make(chan types.RoomCommand, 32)
+
+	// Register in RoomManager
+	app.RoomManager.Mu.Lock()
+	app.RoomManager.Rooms[roomID] = room
+	app.RoomManager.CmdChans[roomID] = cmdChan
+	app.RoomManager.Mu.Unlock()
+
+	go services.RunRoom(room, cmdChan, app.RoomManager.CleanupCh)
+
+	// Optionally: send CmdJoin for host (not strictly needed if you already added above)
+	// cmdChan <- types.RoomCommand{Type: types.CmdJoin, User: host}
+
 	c.JSON(http.StatusOK, gin.H{
-		"room_id": room.RoomID,
-		"user_id": host.ID,
-		"name":    host.Name,
+		"room_id":   roomID,
+		"user_id":   host.ID,
+		"user_name": host.Name,
 	})
 }
 
-func (app *Application) handleUserConnection(user *types.User, room *types.Room) {
+func (app *Application) handleUserConnection(user *types.User, roomID string) {
+	cmdChan := app.RoomManager.CmdChans[roomID]
 	defer func() {
-		user.Conn.Close()
-		close(user.MessageChannel)
-		app.RoomManager.ExitRoom(user, room.RoomID)
-		log.Printf("User %s disconnected from room %s\n", user.Name, room.RoomID)
+		cmdChan <- types.RoomCommand{Type: types.CmdLeave, User: user}
+		log.Printf("User %s disconnected from room %s\n", user.Name, roomID)
 	}()
 
-	// Pickup the message from the user channel and send to the client
+	// send replies/Broadcast to clients
 	go func() {
 		for msg := range user.MessageChannel {
-			if err := user.Conn.WriteJSON(msg.Data); err != nil {
+			if err := user.Conn.WriteJSON(msg); err != nil {
 				log.Printf("Error sending message to %s: %v\n", user.Name, err)
 				break
 			}
 		}
 	}()
 
-	// Read the message from client and broadcast to other user
+	time.Sleep(2 * time.Second)
+	// Read messages from client
 	for {
 		var msg types.Message
 		err := user.Conn.ReadJSON(&msg)
@@ -100,34 +148,19 @@ func (app *Application) handleUserConnection(user *types.User, room *types.Room)
 			log.Printf("Error reading message from %s: %v\n", user.Name, err)
 			break
 		}
-		if err := validateMessage(&msg); err != nil {
-			log.Printf("Validation error from %s: %v\n", user.Name, err)
-			continue // Skip invalid message
-		}
 		msg.FromUser = user
-		msg.RoomID = room.RoomID
-		log.Println(msg)
-		app.RoomManager.BroadcastToRoom(&msg)
-	}
-}
+		msg.RoomID = roomID
 
-func validateMessage(msg *types.Message) error {
-	switch msg.Type {
-	case types.MessageTypeChat:
-		text, ok := msg.Data["text"].(string)
-		if !ok || text == "" {
-			return fmt.Errorf("invalid chat message: missing or empty text")
+		cmd := types.RoomCommand{
+			User:    user,
+			Message: &msg,
 		}
-	case types.MessageTypeVideoPlay, types.MessageTypeVideoPause:
-		// No extra data needed, but you could check for timestamp if required
-	case types.MessageTypeVideoSeek:
-		_, ok := msg.Data["position"].(float64)
-		if !ok {
-			return fmt.Errorf("invalid seek message: missing or invalid position")
+		switch msg.Type {
+		case types.MessageTypeSyncRequest:
+			cmd.Type = types.CmdSyncReq
+		default:
+			cmd.Type = types.CmdBroadcast
 		}
-	// Add more cases as needed
-	default:
-		return fmt.Errorf("unknown message type: %s", msg.Type)
+		cmdChan <- cmd
 	}
-	return nil
 }
