@@ -1,6 +1,8 @@
 package types
 
 import (
+	"sync"
+
 	"github.com/gorilla/websocket"
 )
 
@@ -8,8 +10,8 @@ import (
 type User struct {
 	ID             string          `json:"id"`
 	Name           string          `json:"name"`
-	Conn           *websocket.Conn `json:"-"`
-	MessageChannel chan *Message   `json:"-"`
+	Conn           *websocket.Conn `json:"-"` // Do not expose in JSON.
+	MessageChannel chan *Message   `json:"-"` // Internal only.
 }
 
 // MessageType defines allowed message types.
@@ -27,13 +29,14 @@ const (
 
 // Message represents a chat or control message sent via WebSocket.
 type Message struct {
-	FromUser  *User                  `json:"user"` // Pointer for consistency and efficiency.
-	Type      MessageType            `json:"type"` // Use enum for safety.
-	Data      map[string]interface{} `json:"data"` // Flexible payload for different message types.
-	RoomID    string                 `json:"room_id"`
-	Timestamp int64                  `json:"time_stamp"` // Unix timestamp for ordering/history.
+	FromUser  *User                  `json:"user"`       // Sender of the message.
+	Type      MessageType            `json:"type"`       // Type of message.
+	Data      map[string]interface{} `json:"data"`       // Payload.
+	RoomID    string                 `json:"room_id"`    // Which room this message belongs to.
+	Timestamp int64                  `json:"time_stamp"` // Unix timestamp.
 }
 
+// RoomCommandType defines internal room commands.
 type RoomCommandType int
 
 const (
@@ -42,23 +45,25 @@ const (
 	CmdSyncReq
 	CmdBroadcast
 	CmdHostChange
-	// Add more as needed
+	// Add more as needed.
 )
 
+// RoomCommand represents a command sent to the room goroutine.
 type RoomCommand struct {
 	Type    RoomCommandType
 	User    *User
 	Message *Message
-	Reply   chan interface{} // Optional: for synchronous commands
+	Reply   chan interface{} // Optional: for synchronous commands.
 }
 
 // Room represents a watch party room.
 type Room struct {
-	RoomID       string
-	Host         *User            // Store host's user ID for quick checks.
-	Members      map[string]*User // userID -> *User, for fast lookup and removal.
-	VideoURL     string
-	IsPlaying    bool       // "playing", "paused", etc.
-	VideoRuntime float64    // Current playback position in seconds.
-	Messages     []*Message // Chat and event history (optional, for new joiners).
+	RoomID       string           // Unique room ID.
+	Host         *User            // Current host.
+	Members      map[string]*User // userID → *User.
+	VideoURL     string           // Current video URL.
+	IsPlaying    bool             // Playing or paused.
+	VideoRuntime float64          // Current playback position in seconds.
+	Messages     []*Message       // (optional) chat and event history.
+	Mu           sync.RWMutex     // Protects Members and Messages.
 }

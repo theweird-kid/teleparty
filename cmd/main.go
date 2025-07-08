@@ -1,10 +1,9 @@
 package main
 
 import (
-	"fmt"
+	"log"
 	"net/http"
 	"os"
-	"strings"
 
 	"github.com/gin-contrib/cors"
 	"github.com/gin-gonic/gin"
@@ -13,12 +12,13 @@ import (
 )
 
 func main() {
-	fmt.Println("teleparty")
-	allowedOrigins := strings.Split(os.Getenv("ALLOWED_ORIGINS"), ",")
+	log.Println("Starting Teleparty")
+	allowedOrigins := []string{"http://localhost:5173/*"}
+	allowedOrigins = append(allowedOrigins, os.Getenv("ALLOWED_ORIGINS"))
 	r := gin.Default()
 	r.Use(cors.New(cors.Config{
 		AllowOrigins:     allowedOrigins,
-		AllowMethods:     []string{"GET", "POST", "PUT", "DELETE"},
+		AllowMethods:     []string{"GET", "POST", "PUT", "DELETE", "OPTIONS"},
 		AllowHeaders:     []string{"Origin", "Content-Type", "Accept", "Authorization"},
 		AllowCredentials: true,
 	}))
@@ -29,6 +29,9 @@ func main() {
 		RoomManager: rm,
 	}
 
+	r.GET("/", func(c *gin.Context) {
+		c.JSON(http.StatusOK, gin.H{})
+	})
 	r.GET("/join/:room_id", app.JoinRoom)
 	r.GET("/join_req/:room_id", app.RequestJoin)
 	r.POST("/create", app.CreateRoom)
@@ -36,5 +39,6 @@ func main() {
 		c.JSON(http.StatusOK, gin.H{})
 	})
 
-	r.Run("0.0.0.0:8080")
+	log.Println("Starting server on port 8080...")
+	r.Run(":8080")
 }

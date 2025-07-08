@@ -19,26 +19,28 @@ type Application struct {
 const BUFFER_SIZE int = 16
 
 var upgrader = websocket.Upgrader{
-	CheckOrigin: func(r *http.Request) bool { return true }, // For dev only; restrict in prod!
+	CheckOrigin: func(r *http.Request) bool { return true }, // TODO: Restrict in production!
 }
 
+// join room websocket connection
 func (app *Application) JoinRoom(c *gin.Context) {
 	roomID := c.Param("room_id")
 	userID := c.Query("user_id")
 	if userID == "" {
-		c.JSON(http.StatusBadRequest, gin.H{"error": "name required"})
+		c.JSON(http.StatusBadRequest, gin.H{"error": "user_id required"})
 		return
 	}
 
-	room := app.RoomManager.Rooms[roomID]
-	if room == nil {
+	entry, ok := app.RoomManager.GetRoomEntry(roomID)
+	if !ok {
 		c.JSON(http.StatusNotFound, gin.H{"error": "room not found"})
 		return
 	}
 
-	// Get the registered user and write conn
-	user := room.Members[userID]
-	if user == nil {
+	entry.Room.Mu.RLock()
+	user, exists := entry.Room.Members[userID]
+	entry.Room.Mu.RUnlock()
+	if !exists {
 		c.JSON(http.StatusNotFound, gin.H{"error": "user not found in room"})
 		return
 	}
@@ -50,10 +52,11 @@ func (app *Application) JoinRoom(c *gin.Context) {
 	}
 	user.Conn = conn
 
-	// Start goroutine to handle incoming/outgoing messages for this user
+	// Start goroutine to handle this user
 	go app.handleUserConnection(user, roomID)
 }
 
+// request to join a room (HTTP → registers user → returns IDs)
 func (app *Application) RequestJoin(c *gin.Context) {
 	name := c.Query("name")
 	roomID := c.Param("room_id")
@@ -61,14 +64,21 @@ func (app *Application) RequestJoin(c *gin.Context) {
 		c.JSON(http.StatusBadRequest, gin.H{"error": "name required"})
 		return
 	}
+
+	entry, ok := app.RoomManager.GetRoomEntry(roomID)
+	if !ok {
+		c.JSON(http.StatusNotFound, gin.H{"error": "room not found"})
+		return
+	}
+
 	user := &types.User{
 		ID:             utils.GenerateRandomID(),
 		Name:           name,
-		MessageChannel: make(chan *types.Message, 16),
+		MessageChannel: make(chan *types.Message, BUFFER_SIZE),
 	}
-	// Register the user in the room
-	cmdChan := app.RoomManager.CmdChans[roomID]
-	cmdChan <- types.RoomCommand{
+
+	// register user
+	entry.CmdChan <- types.RoomCommand{
 		Type: types.CmdJoin,
 		User: user,
 	}
@@ -80,56 +90,43 @@ func (app *Application) RequestJoin(c *gin.Context) {
 	})
 }
 
+// create a new room and host
 func (app *Application) CreateRoom(c *gin.Context) {
 	name := c.Query("name")
 	if name == "" {
 		c.JSON(http.StatusBadRequest, gin.H{"error": "name required"})
 		return
 	}
-	// Create User (host)
+
 	host := &types.User{
 		ID:             utils.GenerateRandomID(),
 		Name:           name,
-		MessageChannel: make(chan *types.Message, 16),
+		MessageChannel: make(chan *types.Message, BUFFER_SIZE),
 	}
-	// Create Room
-	roomID := utils.GenerateRandomID()
-	room := &types.Room{
-		RoomID:       roomID,
-		Host:         host,
-		Members:      map[string]*types.User{host.ID: host},
-		VideoURL:     "",
-		VideoRuntime: 0,
-		IsPlaying:    false,
-	}
-	cmdChan := make(chan types.RoomCommand, 32)
 
-	// Register in RoomManager
-	app.RoomManager.Mu.Lock()
-	app.RoomManager.Rooms[roomID] = room
-	app.RoomManager.CmdChans[roomID] = cmdChan
-	app.RoomManager.Mu.Unlock()
-
-	go services.RunRoom(room, cmdChan, app.RoomManager.CleanupCh)
-
-	// Optionally: send CmdJoin for host (not strictly needed if you already added above)
-	// cmdChan <- types.RoomCommand{Type: types.CmdJoin, User: host}
+	room := app.RoomManager.CreateNewRoom(host)
 
 	c.JSON(http.StatusOK, gin.H{
-		"room_id":   roomID,
+		"room_id":   room.RoomID,
 		"user_id":   host.ID,
 		"user_name": host.Name,
 	})
 }
 
+// handles a user websocket connection lifecycle
 func (app *Application) handleUserConnection(user *types.User, roomID string) {
-	cmdChan := app.RoomManager.CmdChans[roomID]
+	entry, ok := app.RoomManager.GetRoomEntry(roomID)
+	if !ok {
+		log.Printf("Room %s no longer exists", roomID)
+		return
+	}
+
 	defer func() {
-		cmdChan <- types.RoomCommand{Type: types.CmdLeave, User: user}
+		entry.CmdChan <- types.RoomCommand{Type: types.CmdLeave, User: user}
 		log.Printf("User %s disconnected from room %s\n", user.Name, roomID)
 	}()
 
-	// send replies/Broadcast to clients
+	// send messages to client
 	go func() {
 		for msg := range user.MessageChannel {
 			if err := user.Conn.WriteJSON(msg); err != nil {
@@ -139,8 +136,9 @@ func (app *Application) handleUserConnection(user *types.User, roomID string) {
 		}
 	}()
 
-	time.Sleep(2 * time.Second)
-	// Read messages from client
+	time.Sleep(2 * time.Second) // optional: allow client to catch up
+
+	// read messages from client
 	for {
 		var msg types.Message
 		err := user.Conn.ReadJSON(&msg)
@@ -155,12 +153,13 @@ func (app *Application) handleUserConnection(user *types.User, roomID string) {
 			User:    user,
 			Message: &msg,
 		}
+
 		switch msg.Type {
 		case types.MessageTypeSyncRequest:
 			cmd.Type = types.CmdSyncReq
 		default:
 			cmd.Type = types.CmdBroadcast
 		}
-		cmdChan <- cmd
+		entry.CmdChan <- cmd
 	}
 }
