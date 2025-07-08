@@ -19,7 +19,16 @@ type Application struct {
 const BUFFER_SIZE int = 16
 
 var upgrader = websocket.Upgrader{
-	CheckOrigin: func(r *http.Request) bool { return true }, // TODO: Restrict in production!
+	CheckOrigin: func(r *http.Request) bool {
+		origin := r.Header.Get("Origin")
+		// allow only your frontend's domain
+		switch origin {
+		case "https://teleparty-app.onrender.com":
+			return true
+		default:
+			return false
+		}
+	},
 }
 
 // join room websocket connection

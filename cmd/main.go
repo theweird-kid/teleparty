@@ -3,7 +3,6 @@ package main
 import (
 	"log"
 	"net/http"
-	"os"
 
 	"github.com/gin-contrib/cors"
 	"github.com/gin-gonic/gin"
@@ -13,11 +12,9 @@ import (
 
 func main() {
 	log.Println("Starting Teleparty")
-	allowedOrigins := []string{"http://localhost:5173/*"}
-	allowedOrigins = append(allowedOrigins, os.Getenv("ALLOWED_ORIGINS"))
 	r := gin.Default()
 	r.Use(cors.New(cors.Config{
-		AllowOrigins:     allowedOrigins,
+		AllowOrigins:     []string{"https://teleparty-app.onrender.com"},
 		AllowMethods:     []string{"GET", "POST", "PUT", "DELETE", "OPTIONS"},
 		AllowHeaders:     []string{"Origin", "Content-Type", "Accept", "Authorization"},
 		AllowCredentials: true,
